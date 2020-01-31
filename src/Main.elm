@@ -1,10 +1,10 @@
 module Main exposing (main)
 
 import Browser
-import Browser.Navigation as Nav
 import Html exposing (..)
 import Html.Attributes exposing (..)
-import Url
+import Http
+import Json.Decode as JD
 
 
 
@@ -13,13 +13,11 @@ import Url
 
 main : Program () Model Msg
 main =
-    Browser.application
+    Browser.document
         { init = init
         , view = view
         , update = update
         , subscriptions = subscriptions
-        , onUrlChange = UrlChanged
-        , onUrlRequest = LinkClicked
         }
 
 
@@ -27,15 +25,19 @@ main =
 -- MODEL
 
 
-type alias Model =
-    { key : Nav.Key
-    , url : Url.Url
-    }
+type Item
+    = Item String Bool
 
 
-init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
-init flags url key =
-    ( Model key url, Cmd.none )
+type Model
+    = Loading
+    | Success (List Item)
+    | Failure
+
+
+init : () -> ( Model, Cmd Msg )
+init _ =
+    ( Loading, getItems )
 
 
 
@@ -43,25 +45,47 @@ init flags url key =
 
 
 type Msg
-    = LinkClicked Browser.UrlRequest
-    | UrlChanged Url.Url
+    = None
+    | Ready
+    | GotItems (Result Http.Error (List Item))
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        LinkClicked urlRequest ->
-            case urlRequest of
-                Browser.Internal url ->
-                    ( model, Nav.pushUrl model.key (Url.toString url) )
+        None ->
+            ( model, Cmd.none )
 
-                Browser.External href ->
-                    ( model, Nav.load href )
+        Ready ->
+            ( model, Cmd.none )
 
-        UrlChanged url ->
-            ( { model | url = url }
-            , Cmd.none
-            )
+        GotItems result ->
+            case result of
+                Ok items ->
+                    ( Success items, Cmd.none )
+
+                Err _ ->
+                    ( Failure, Cmd.none )
+
+
+getItems : Cmd Msg
+getItems =
+    Http.get
+        { url = "https://goalsandtasks.herokuapp.com/api/tasks"
+        , expect = Http.expectJson GotItems itemsDecoder
+        }
+
+
+itemsDecoder : JD.Decoder (List Item)
+itemsDecoder =
+    JD.field "data" (JD.list itemDecoder)
+
+
+itemDecoder : JD.Decoder Item
+itemDecoder =
+    JD.map2 Item
+        (JD.field "text" JD.string)
+        (JD.field "complete" JD.bool)
 
 
 
@@ -79,21 +103,25 @@ subscriptions _ =
 
 view : Model -> Browser.Document Msg
 view model =
-    { title = "URL Interceptor"
+    { title = "Tasks"
     , body =
-        [ text "The current URL is: "
-        , b [] [ text (Url.toString model.url) ]
-        , ul []
-            [ viewLink "/home"
-            , viewLink "/profile"
-            , viewLink "/reviews/the-century-of-the-self"
-            , viewLink "/reviews/public-opinion"
-            , viewLink "/reviews/shah-of-shahs"
-            ]
-        ]
+        case model of
+            Loading ->
+                [ text "Loading tasks..." ]
+
+            Success items ->
+                [ text "List of tasks:"
+                , ul [] (List.map (\i -> viewLink i) items)
+                ]
+
+            Failure ->
+                [ text "Sorry something wrong happend" ]
     }
 
 
-viewLink : String -> Html msg
-viewLink path =
-    li [] [ a [ href path ] [ text path ] ]
+viewLink : Item -> Html msg
+viewLink (Item txt complete) =
+        li []
+            [ input [ type_ "checkbox", checked complete] []
+            , text txt
+            ]
